@@ -1,40 +1,10 @@
 angular.module('deciframeApp').controller('SequenciaController', function($http, $window, ngProgressFactory, $anchorScroll, $location, GENEROS) {
-  var sequencia1 = {
-    'index': 1,
-    'acordes': [
-      { 'acorde': 'Bm', 'cor': '#2E1C74' },
-      { 'acorde': 'G',  'cor': '#2E1C74' },
-      { 'acorde': 'D',  'cor': '#2E1C74' },
-      { 'acorde': 'A',  'cor': '#2E1C74' }
-  ]};
-  var sequencia2 = {
-    'index': 1,
-    'acordes': [
-      { 'acorde': 'C',  'cor': '#2E1C74' },
-      { 'acorde': 'G',  'cor': '#2E1C74' },
-      { 'acorde': 'Am', 'cor': '#2E1C74' },
-      { 'acorde': 'F',  'cor': '#2E1C74' }
-  ]};
-  var sequencia3 = {
-    'index': 1,
-    'acordes': [
-      { 'acorde': 'Gm', 'cor': '#2E1C74' },
-      { 'acorde': 'F',  'cor': '#2E1C74' }
-  ]};
-  var sequencia4 = {
-    'index': 1,
-    'acordes': [
-      { 'acorde': 'C',  'cor': '#2E1C74' },
-      { 'acorde': 'C7', 'cor': '#2E1C74' },
-      { 'acorde': 'F',  'cor': '#2E1C74' },
-      { 'acorde': 'Fm', 'cor': '#2E1C74' }
-  ]};
   var vm = this;
   vm.sequenciasFamosas = [];
-  vm.sequenciasFamosas.push(sequencia1);
-  vm.sequenciasFamosas.push(sequencia2);
-  vm.sequenciasFamosas.push(sequencia3);
-  vm.sequenciasFamosas.push(sequencia4);
+  vm.novaSequencia = "";
+  vm.mensagemCadastro = "";
+  vm.erroCadastro = false;
+  vm.cadastrandoSequencia = false;
   vm.minhaSequencia = {};
   vm.isSearching = false;
   vm.showSearchResultsCount = false;
@@ -43,6 +13,55 @@ angular.module('deciframeApp').controller('SequenciaController', function($http,
   vm.generos = GENEROS;
   vm.meuGenero = "";
   vm.progressbar = ngProgressFactory.createInstance();
+
+  vm.carregarSequencias = function() {
+    $http.get("sequencias")
+      .success(function(data) {
+        vm.sequenciasFamosas = data.map(function(sequencia) {
+          return {
+            'id': sequencia.id,
+            'acordes': sequencia.acordes.map(function(acorde) {
+              return { 'acorde': acorde, 'cor': '#2E1C74' };
+            })
+          };
+        });
+      })
+      .error(function() {
+        vm.sequenciasFamosas = [];
+        vm.mensagemCadastro = "Não foi possível carregar as sequências.";
+        vm.erroCadastro = true;
+      });
+  };
+
+  vm.cadastrarSequencia = function() {
+    vm.mensagemCadastro = "";
+    vm.erroCadastro = false;
+    var acordes = vm.novaSequencia.split(",").map(function(acorde) {
+      return acorde.trim();
+    });
+    vm.cadastrandoSequencia = true;
+    $http.post("sequencias", { 'acordes': acordes })
+      .success(function() {
+        vm.cadastrandoSequencia = false;
+        vm.erroCadastro = false;
+        vm.mensagemCadastro = "Sequência cadastrada com sucesso!";
+        vm.novaSequencia = "";
+        vm.carregarSequencias();
+      })
+      .error(function(data, status) {
+        vm.cadastrandoSequencia = false;
+        vm.erroCadastro = true;
+        if (data && data.erro) {
+          vm.mensagemCadastro = data.erro;
+        } else if (status === 409) {
+          vm.mensagemCadastro = "Essa sequência já está cadastrada.";
+        } else {
+          vm.mensagemCadastro = "Sequência inválida. Use de 2 a 8 acordes separados por vírgula.";
+        }
+      });
+  };
+
+  vm.carregarSequencias();
 
   vm.temAcorde = function(acorde) {
     if (vm.minhaSequencia.acordes) {
@@ -70,7 +89,8 @@ angular.module('deciframeApp').controller('SequenciaController', function($http,
     vm.musics = [];
 
     var apiUrl = "";
-    var searchString = "similares?sequencia=".concat(createChordsString(vm.minhaSequencia.acordes));
+    var searchString = "similares?sequencia=".concat(
+      encodeURIComponent(createChordsString(vm.minhaSequencia.acordes)));
     if (vm.meuGenero !== "" && vm.meuGenero !== null) {
       searchString += "&generos="+vm.meuGenero;
     }

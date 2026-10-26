@@ -7,6 +7,22 @@
           <df-hex acorde="{{acordeon.acorde}}" acorde-color="{{acordeon.cor}}" acorde-checked="Sequencia.temAcorde(acordeon)" ng-repeat="acordeon in sequencia.acordes"></df-hex>
         </div>
         <br style="clear: both;">
+        <form ng-submit="Sequencia.cadastrarSequencia()">
+          <div class="form-group">
+            <label for="nova-sequencia">Cadastre uma nova sequência</label>
+            <input type="text" id="nova-sequencia" class="form-control"
+              ng-model="Sequencia.novaSequencia" placeholder="Ex.: Am,F,C,G">
+          </div>
+          <button type="submit" class="btn btn-primary"
+            ng-disabled="Sequencia.cadastrandoSequencia">
+            <span ng-show="Sequencia.cadastrandoSequencia">Cadastrando...</span>
+            <span ng-hide="Sequencia.cadastrandoSequencia">Cadastrar</span>
+          </button>
+          <p class="help-block" ng-if="Sequencia.mensagemCadastro"
+            ng-class="Sequencia.erroCadastro ? 'text-danger' : 'text-success'">
+            {{Sequencia.mensagemCadastro}}
+          </p>
+        </form>
         <button class="search-results-count" ng-if="Sequencia.showSearchResultsCount" ng-click="Sequencia.goToResults()">
           <span class="glyphicon glyphicon-triangle-bottom bounce animated infinite"></span>
           <br>

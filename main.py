@@ -1,12 +1,77 @@
 # coding: utf-8
 import json
+import os
+import sqlite3
+from datetime import datetime, timezone
 from flask import Flask, request
 import sys
 from musica import *
+from matching import musica_contem_sequencia
 from collections import OrderedDict
 import unicodedata
 
 app = Flask(__name__)
+
+SEQUENCIAS_ORIGINAIS = [
+    ('Bm', 'G', 'D', 'A'),
+    ('C', 'G', 'Am', 'F'),
+    ('Em', 'G'),
+    ('C', 'A7', 'Dm', 'G7'),
+    ('Gm', 'F'),
+    ('C', 'C7', 'F', 'Fm'),
+]
+
+
+def get_db_path():
+    db_path = os.environ.get('DB_PATH')
+    if db_path:
+        return db_path
+    if os.path.isdir('/data'):
+        return '/data/sequencias.db'
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sequencias.db')
+
+
+def get_db_connection():
+    db_path = get_db_path()
+    db_dir = os.path.dirname(db_path)
+    if db_dir and not os.path.isdir(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_db_connection()
+    try:
+        conn.execute('''CREATE TABLE IF NOT EXISTS sequencias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            acordes TEXT NOT NULL UNIQUE,
+            criada_em TEXT NOT NULL
+        )''')
+        total = conn.execute('SELECT COUNT(*) FROM sequencias').fetchone()[0]
+        if total == 0:
+            for acordes in SEQUENCIAS_ORIGINAIS:
+                conn.execute(
+                    'INSERT INTO sequencias (acordes, criada_em) VALUES (?, ?)',
+                    (','.join(acordes), datetime.now(timezone.utc).isoformat()))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+init_db()
+
+
+def sequencia_cadastrada(acordes):
+    texto = ','.join(acordes)
+    conn = get_db_connection()
+    try:
+        registro = conn.execute(
+            'SELECT 1 FROM sequencias WHERE acordes = ?', (texto,)).fetchone()
+        return registro is not None
+    finally:
+        conn.close()
 
 def limpa_cifra(raw_cifra):
     cifra = []
@@ -37,16 +102,10 @@ TAM_PAGINA = 100
 genero_musicas = {}
 generos = set()
 acordes = set()
-sequencias = {'BmGDA' : 0,
-        'CGAmF' : 1,
-        'EmG' : 2,
-        'CA7DmG7' : 3,
-        'GmF' : 4,
-        'CC7FFm' : 5}
 
 musicas_dict = {}
 
-f = open('data/top/dataset_final.csv')
+f = open('data/top/dataset_final.csv', encoding='utf-8')
 f.readline()
 
 for line in f:
@@ -163,6 +222,67 @@ def get_generos():
 def get_acordes():
     return json.dumps(list(acordes))
 
+
+@app.route('/sequencias')
+def get_sequencias():
+    conn = get_db_connection()
+    try:
+        registros = conn.execute(
+            'SELECT id, acordes FROM sequencias ORDER BY id').fetchall()
+    finally:
+        conn.close()
+    return json.dumps([
+        {'id': registro['id'], 'acordes': registro['acordes'].split(',')}
+        for registro in registros
+    ])
+
+
+def acordes_invalidos(acordes):
+    if not isinstance(acordes, list) or not (2 <= len(acordes) <= 8):
+        return True
+    for acorde in acordes:
+        if not isinstance(acorde, str):
+            return True
+        if acorde == '' or len(acorde) > 20:
+            return True
+        if ',' in acorde or ';' in acorde:
+            return True
+        if any(caractere.isspace() for caractere in acorde):
+            return True
+    return False
+
+
+@app.route('/sequencias', methods=['POST'])
+def post_sequencia():
+    dados = request.get_json(silent=True)
+    if not isinstance(dados, dict):
+        return json.dumps({'erro': 'Corpo da requisição inválido.'}), 400
+
+    acordes_novos = dados.get('acordes')
+    if acordes_invalidos(acordes_novos):
+        return json.dumps({
+            'erro': 'Sequência inválida: use de 2 a 8 acordes, cada um '
+                    'com até 20 caracteres e sem espaços, vírgulas ou '
+                    'ponto e vírgula.'
+        }), 400
+
+    texto = ','.join(acordes_novos)
+    conn = get_db_connection()
+    try:
+        try:
+            cursor = conn.execute(
+                'INSERT INTO sequencias (acordes, criada_em) VALUES (?, ?)',
+                (texto, datetime.now(timezone.utc).isoformat()))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            return json.dumps({'erro': 'Sequência já cadastrada.'}), 409
+        novo_id = cursor.lastrowid
+    finally:
+        conn.close()
+
+    return json.dumps({'id': novo_id, 'acordes': acordes_novos}), 201
+
 @app.route('/musica/<m_id>/')
 def get_musica(m_id):
     return json.dumps(musicas[m_id].__dict__)
@@ -188,25 +308,24 @@ def get_similares():
         musica = musicas[id_musica_tag]
         acordes = musica.acordes
     elif sequencia_tag:
-        acordes = sequencia_tag.replace(',','')
-        similares = []
-
-        if acordes in sequencias:
-            id_seq = sequencias[acordes]
-            similares = get_pagina(get_similares_por_sequencia(id_seq, generos_key), pagina_tag)
+        sequencia = sequencia_tag.split(',')
+        if not sequencia_cadastrada(sequencia):
+            return json.dumps([])
+        similares = get_pagina(
+            get_similares_por_sequencia(sequencia, generos_key), pagina_tag)
         return json.dumps(similares)
 
     similares = get_similares(acordes, generos_key, id_musica_tag)
 
     return json.dumps(get_pagina(similares, pagina_tag))
 
-def get_similares_por_sequencia(id_seq, generos_key):
+def get_similares_por_sequencia(acordes_seq, generos_key):
     # filtra para melhor desempenho
     collection = apply_filtro(musicas.values(), generos_key)
 
     similares = []
     for musica in collection:
-        if str(id_seq) in musica.seqs_famosas:
+        if musica_contem_sequencia(musica.cifra, acordes_seq):
             similar = {
                 'id_unico_musica' : musica.id_unico_musica,
                 'id_artista' : musica.id_artista,
